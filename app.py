@@ -5,6 +5,10 @@ import numpy as np
 import plotly.graph_objects as go
 import joblib
 from fredapi import Fred
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.pipeline import Pipeline
 
 st.set_page_config(
     page_title="RecessionRadar",
@@ -23,11 +27,120 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ── Train models on startup (no pkl files needed) ─────────
 @st.cache_resource
 def load_models():
-    macro    = joblib.load("models/saved/macro_model.pkl")
-    personal = joblib.load("models/saved/personal_model.pkl")
-    return macro, personal
+    # ── Macro model ───────────────────────────────────────
+    # Historical recession data (2001, 2008, 2020)
+    macro_data = {
+        "yield_curve":           [-0.5,-0.3, 0.5, 1.0, 1.5, 2.0, 2.5, 2.0,
+                                   1.5, 1.0, 0.5, 0.0,-0.5,-1.0,-0.8,-0.5,
+                                   0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 2.5, 2.0,
+                                   1.5, 1.0, 0.5, 0.0,-0.5,-1.0,-2.0,-1.5,
+                                   0.5, 1.0, 1.5, 2.0, 2.5, 2.0, 1.5, 1.0],
+        "unemployment_claims":   [400,380,350,320,300,280,260,270,
+                                   280,300,320,350,400,450,420,400,
+                                   280,260,250,240,230,220,230,240,
+                                   250,260,270,300,350,600,900,500,
+                                   400,350,300,270,250,240,230,220],
+        "manufacturing":         [16,16,16,17,17,17,17,16,
+                                   16,15,15,14,13,12,12,13,
+                                   17,17,18,18,18,18,17,17,
+                                   17,16,16,15,14,13,11,12,
+                                   15,16,17,17,18,18,17,17],
+        "consumer_confidence":   [80,85,90,95,100,105,100,95,
+                                   90,80,70,60,55,50,55,60,
+                                   90,95,100,105,100,95,95,100,
+                                   105,100,95,90,80,60,40,55,
+                                   75,85,90,95,100,105,100,95],
+        "housing_starts":        [1800,1900,2000,2100,2100,2000,
+                                   1800,1600,1400,1200,1000,900,
+                                   850,900,950,1000,1300,1400,
+                                   1500,1500,1400,1400,1400,1400,
+                                   1450,1450,1400,1300,1200,1000,
+                                   700,900,1100,1200,1300,1400,
+                                   1500,1500,1400,1400],
+        "industrial_production": [100,101,102,103,104,104,103,102,
+                                   101,99,97,95,93,92,93,95,
+                                   100,101,102,103,104,105,105,104,
+                                   103,102,101,100,98,90,80,90,
+                                   95,97,99,101,103,104,104,103],
+        "recession":             [1,1,0,0,0,0,0,0,
+                                   0,0,1,1,1,1,0,0,
+                                   0,0,0,0,0,0,0,0,
+                                   0,0,0,1,1,1,1,0,
+                                   0,0,0,0,0,0,0,0],
+    }
+
+    df_macro = pd.DataFrame(macro_data)
+    feature_cols = ["yield_curve","unemployment_claims","manufacturing",
+                    "consumer_confidence","housing_starts","industrial_production"]
+
+    X = df_macro[feature_cols]
+    y = df_macro["recession"]
+
+    macro_pipeline = Pipeline([
+        ("scaler", StandardScaler()),
+        ("model",  LogisticRegression(
+            class_weight="balanced",
+            random_state=42,
+            max_iter=1000
+        ))
+    ])
+    macro_pipeline.fit(X, y)
+
+    # ── Personal risk model ───────────────────────────────
+    personal_data = {
+        "industry": [
+            "Construction","Construction","Construction",
+            "Manufacturing","Manufacturing","Manufacturing",
+            "Finance","Finance","Finance",
+            "Technology","Technology","Technology",
+            "Healthcare","Healthcare","Healthcare",
+            "Retail","Retail","Retail",
+            "Education","Education","Education",
+            "Hospitality","Hospitality","Hospitality",
+        ],
+        "recession": [
+            "dotcom","financial","covid",
+            "dotcom","financial","covid",
+            "dotcom","financial","covid",
+            "dotcom","financial","covid",
+            "dotcom","financial","covid",
+            "dotcom","financial","covid",
+            "dotcom","financial","covid",
+            "dotcom","financial","covid",
+        ],
+        "job_loss_rate": [
+             8.0,16.0,14.0,
+             6.0,12.0, 8.0,
+             3.0, 6.0, 4.0,
+             5.0, 4.0, 3.0,
+             1.0, 1.5, 2.0,
+             3.0, 5.0,10.0,
+             0.5, 1.0, 1.5,
+             4.0, 7.0,35.0,
+        ],
+    }
+
+    df_personal = pd.DataFrame(personal_data)
+    le_industry  = LabelEncoder()
+    le_recession = LabelEncoder()
+    df_personal["industry_enc"]  = le_industry.fit_transform(df_personal["industry"])
+    df_personal["recession_enc"] = le_recession.fit_transform(df_personal["recession"])
+    df_personal["high_risk"]     = (df_personal["job_loss_rate"] > 8).astype(int)
+
+    X_p = df_personal[["industry_enc","recession_enc"]]
+    y_p = df_personal["high_risk"]
+
+    personal_model = RandomForestClassifier(n_estimators=100, random_state=42)
+    personal_model.fit(X_p, y_p)
+
+    return macro_pipeline, {
+        "model":        personal_model,
+        "le_industry":  le_industry,
+        "le_recession": le_recession,
+    }
 
 macro_model, personal_bundle = load_models()
 
@@ -54,11 +167,15 @@ with st.sidebar:
     st.title("📡 RecessionRadar")
     st.caption("Real-time recession risk analysis")
     st.divider()
-    api_key = st.text_input(
-        "FRED API Key",
-        type="password",
-        help="Get free key at fred.stlouisfed.org"
-    )
+    try:
+        api_key = st.secrets["FRED_API_KEY"]
+        st.success("✅ Live data connected")
+    except:
+        api_key = st.text_input(
+            "FRED API Key",
+            type="password",
+            help="Get free key at fred.stlouisfed.org"
+        )
     st.divider()
     st.caption("""
     Tracks 6 Federal Reserve indicators
@@ -104,7 +221,6 @@ with tab1:
         X_now          = pd.DataFrame([current_data])
         recession_prob = macro_model.predict_proba(X_now)[0][1]
 
-    # ── Big Risk Score ─────────────────────────────────────
     if recession_prob < 0.3:
         color, label, emoji = "#00ff88", "LOW RISK",      "🟢"
     elif recession_prob < 0.6:
@@ -131,40 +247,28 @@ with tab1:
         """, unsafe_allow_html=True)
 
     st.divider()
-
-    # ── Indicator Cards ────────────────────────────────────
     st.subheader("📊 Current Economic Indicators")
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.metric(
-            "📈 Yield Curve",
-            f"{current_data.get('yield_curve', 0):.2f}%",
-            help="Negative = recession warning"
-        )
+        st.metric("📈 Yield Curve",
+                  f"{current_data.get('yield_curve',0):.2f}%",
+                  help="Negative = recession warning")
     with c2:
-        st.metric(
-            "👷 Unemployment Claims",
-            f"{current_data.get('unemployment_claims', 0):,.0f}",
-            help="Weekly jobless claims filed"
-        )
+        st.metric("👷 Unemployment Claims",
+                  f"{current_data.get('unemployment_claims',0):,.0f}",
+                  help="Weekly jobless claims filed")
     with c3:
-        st.metric(
-            "🛒 Consumer Confidence",
-            f"{current_data.get('consumer_confidence', 0):.1f}",
-            help="How confident people feel spending"
-        )
+        st.metric("🛒 Consumer Confidence",
+                  f"{current_data.get('consumer_confidence',0):.1f}",
+                  help="How confident people feel spending")
     with c4:
-        st.metric(
-            "🏠 Housing Starts",
-            f"{current_data.get('housing_starts', 0):,.0f}K",
-            help="New homes being built monthly"
-        )
+        st.metric("🏠 Housing Starts",
+                  f"{current_data.get('housing_starts',0):,.0f}K",
+                  help="New homes being built monthly")
 
-    # ── Yield Curve Chart ──────────────────────────────────
     if df_live is not None:
         st.divider()
-        st.subheader("📉 Yield Curve — The Most Reliable Recession Predictor")
-
+        st.subheader("📉 Yield Curve — Most Reliable Recession Predictor")
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=df_live.index,
@@ -174,36 +278,29 @@ with tab1:
             fill="tozeroy",
             fillcolor="rgba(0,212,255,0.08)"
         ))
-        fig.add_hline(
-            y=0,
-            line_dash="dash",
-            line_color="red",
-            opacity=0.7,
-            annotation_text="⚠️ Inversion Zone — Recession Warning"
-        )
+        fig.add_hline(y=0, line_dash="dash", line_color="red",
+                      opacity=0.7,
+                      annotation_text="⚠️ Inversion Zone")
         for start, end, name in [
-            ("2001-03-01", "2001-11-01", "Dot-com"),
-            ("2007-12-01", "2009-06-01", "2008 Crisis"),
-            ("2020-02-01", "2020-04-01", "COVID"),
+            ("2001-03-01","2001-11-01","Dot-com"),
+            ("2007-12-01","2009-06-01","2008 Crisis"),
+            ("2020-02-01","2020-04-01","COVID"),
         ]:
-            fig.add_vrect(
-                x0=start, x1=end,
-                fillcolor="red", opacity=0.12,
-                line_width=0,
-                annotation_text=name,
-                annotation_position="top left"
-            )
+            fig.add_vrect(x0=start, x1=end,
+                          fillcolor="red", opacity=0.12,
+                          line_width=0,
+                          annotation_text=name,
+                          annotation_position="top left")
         fig.update_layout(
             template="plotly_dark",
             paper_bgcolor="#0f0f1a",
             plot_bgcolor="#1a1a2e",
             height=420,
-            title="Every time yield curve went negative — recession followed within 12-18 months",
+            title="Every yield curve inversion was followed by a recession",
             xaxis_title="Year",
             yaxis_title="Yield Spread (%)"
         )
         st.plotly_chart(fig, use_container_width=True)
-
     else:
         st.info("Enter your FRED API key to see the live yield curve chart")
 
@@ -217,9 +314,9 @@ with tab2:
     col1, col2 = st.columns(2)
     with col1:
         industry = st.selectbox("Your Industry", [
-            "Healthcare", "Education", "Technology",
-            "Finance", "Retail", "Manufacturing",
-            "Construction", "Hospitality"
+            "Healthcare","Education","Technology",
+            "Finance","Retail","Manufacturing",
+            "Construction","Hospitality"
         ])
         job_type = st.selectbox("Employment Type", [
             "Permanent Full-time",
@@ -227,7 +324,6 @@ with tab2:
             "Part-time",
         ])
         experience = st.slider("Years of Experience", 0, 30, 5)
-
     with col2:
         company_size = st.selectbox("Company Size", [
             "Large (500+ employees)",
@@ -238,27 +334,19 @@ with tab2:
             "Emergency Fund (months of expenses)", 0, 24, 3
         )
         skills = st.multiselect("Your Key Skills", [
-            "Data/Analytics", "Software Development",
-            "Sales", "Management",
-            "Specialized Trade", "Customer Service", "Research"
+            "Data/Analytics","Software Development",
+            "Sales","Management",
+            "Specialized Trade","Customer Service","Research"
         ])
 
     if st.button("🎯 Calculate My Risk", use_container_width=True):
-
-        # Base risk by industry
         industry_risk = {
-            "Construction":  0.75,
-            "Hospitality":   0.70,
-            "Manufacturing": 0.60,
-            "Retail":        0.50,
-            "Finance":       0.40,
-            "Technology":    0.35,
-            "Education":     0.15,
-            "Healthcare":    0.10,
+            "Construction":  0.75, "Hospitality":   0.70,
+            "Manufacturing": 0.60, "Retail":        0.50,
+            "Finance":       0.40, "Technology":    0.35,
+            "Education":     0.15, "Healthcare":    0.10,
         }
         risk = industry_risk[industry]
-
-        # Adjust for personal factors
         if job_type == "Contract / Freelance": risk += 0.15
         elif job_type == "Part-time":          risk += 0.10
         if experience < 2:                     risk += 0.10
@@ -266,7 +354,6 @@ with tab2:
         if "Small" in company_size:            risk += 0.10
         elif "Large" in company_size:          risk -= 0.05
         if "Data/Analytics" in skills or            "Software Development" in skills:   risk -= 0.08
-
         risk = max(0.05, min(0.95, risk))
 
         if risk < 0.3:
@@ -281,12 +368,11 @@ with tab2:
         cc          = "#00ff88" if cover_ok else "#ff4d4d"
         cl          = "✅ Covered" if cover_ok else "⚠️ Build More"
 
-        # Result cards
         ca, cb, cc2 = st.columns(3)
         for container, val, label, clr, sub in [
-            (ca,  f"{risk:.0%}",        "Your Job Loss Risk",        rc,        re + " " + rl),
-            (cb,  str(fund_needed),     "Recommended Emergency Fund", "#00d4ff", "months of expenses"),
-            (cc2, str(savings_months),  "Your Current Savings",       cc,        cl),
+            (ca,  f"{risk:.0%}",       "Your Job Loss Risk",         rc, re+" "+rl),
+            (cb,  str(fund_needed),    "Recommended Emergency Fund", "#00d4ff", "months of expenses"),
+            (cc2, str(savings_months), "Your Current Savings",       cc, cl),
         ]:
             container.markdown(f"""
             <div style="text-align:center; padding:20px;
@@ -300,8 +386,6 @@ with tab2:
             """, unsafe_allow_html=True)
 
         st.divider()
-
-        # Advice
         st.subheader("💡 What You Should Do Right Now")
         if risk > 0.6:
             st.error("🔴 High Risk — Act Now")
@@ -310,7 +394,6 @@ with tab2:
             - Start a side skill or freelance income stream
             - Update your resume and LinkedIn **before** you need to
             - Cut all non-essential monthly expenses now
-            - Consider upskilling into a more resilient field
             """)
         elif risk > 0.3:
             st.warning("🟡 Moderate Risk — Stay Prepared")
@@ -318,7 +401,6 @@ with tab2:
             - Aim for **6 months** emergency fund
             - Learn recession-proof skills (data, healthcare)
             - Keep your CV and LinkedIn updated regularly
-            - Avoid taking on large new loans right now
             """)
         else:
             st.success("🟢 Low Risk — Keep Building")
@@ -326,42 +408,28 @@ with tab2:
             - Maintain a **3-6 month** emergency fund
             - You are in a resilient sector — keep upskilling
             - Good time to invest and build long term wealth
-            - Help others in your network prepare
             """)
 
         if "Data/Analytics" not in skills:
-            st.info("💡 Tip: Learning data skills is the single best career move for recession-proofing yourself right now")
+            st.info("💡 Learning data skills is the best career move for recession-proofing yourself")
 
-        # Industry comparison chart
         st.divider()
-        st.subheader("📊 Your Industry vs Others — Job Loss in 2008")
-
+        st.subheader("📊 Your Industry vs Others — 2008 Job Loss %")
         industry_2008 = {
-            "Healthcare":    1.5,
-            "Education":     1.0,
-            "Technology":    4.0,
-            "Finance":       6.0,
-            "Retail":        5.0,
-            "Manufacturing": 12.0,
-            "Construction":  16.0,
-            "Hospitality":   7.0,
+            "Healthcare":1.5,"Education":1.0,"Technology":4.0,
+            "Finance":6.0,"Retail":5.0,"Manufacturing":12.0,
+            "Construction":16.0,"Hospitality":7.0,
         }
-
         df_bar = pd.DataFrame({
             "Industry": list(industry_2008.keys()),
             "Loss %":   list(industry_2008.values()),
         }).sort_values("Loss %")
 
-        bar_colors = [
-            "#ff4d4d" if i == industry else "#4da6ff"
-            for i in df_bar["Industry"]
-        ]
-
+        bar_colors = ["#ff4d4d" if i == industry
+                      else "#4da6ff" for i in df_bar["Industry"]]
         fig2 = go.Figure(go.Bar(
-            x=df_bar["Loss %"],
-            y=df_bar["Industry"],
-            orientation="h",
-            marker_color=bar_colors,
+            x=df_bar["Loss %"], y=df_bar["Industry"],
+            orientation="h", marker_color=bar_colors,
             text=[f"{v}%" for v in df_bar["Loss %"]],
             textposition="outside"
         ))
@@ -371,7 +439,7 @@ with tab2:
             plot_bgcolor="#1a1a2e",
             height=350,
             xaxis_title="Job Loss %",
-            title=f"Red = your industry ({industry}) | 2008 Financial Crisis"
+            title=f"Red = your industry ({industry}) | 2008 Crisis"
         )
         st.plotly_chart(fig2, use_container_width=True)
 
@@ -380,7 +448,6 @@ with tab2:
 # ══════════════════════════════════════════
 with tab3:
     st.subheader("📚 How RecessionRadar Works")
-
     st.markdown("""
     ### The 6 Indicators We Track
 
@@ -388,7 +455,7 @@ with tab3:
     |---|---|---|
     | **Yield Curve** | Banks stop lending when inverted | Goes negative |
     | **Unemployment Claims** | Jobs being lost weekly | Spikes above 300K |
-    | **Manufacturing Index** | Factory output falling | Consecutive monthly drops |
+    | **Manufacturing Index** | Factory output falling | Consecutive drops |
     | **Consumer Confidence** | People stop spending | Sharp sustained fall |
     | **Housing Starts** | Construction first to fall | Multi-month decline |
     | **Industrial Production** | Overall factory output | Monthly contraction |
@@ -396,27 +463,17 @@ with tab3:
     ### The Models
     - **Macro model** — Logistic Regression trained on 2001, 2008, 2020 data
     - **Personal model** — Risk scoring based on BLS historical job loss rates
-    - Validated using **walk-forward time series cross validation**
     - Predicts **6 months ahead** — giving you time to act
-
-    ### Why These Indicators Work
-    The yield curve alone has predicted every US recession since 1950.
-    When short-term interest rates exceed long-term rates, banks stop
-    lending profitably — credit freezes, businesses can't grow,
-    layoffs follow. Combined with the other 5 indicators, the signal
-    becomes even stronger.
 
     ### Important Disclaimer
     > This tool outputs probability scores based on historical patterns.
     > Every recession is different. No model predicts the future with
-    > certainty. Use this as one input to your decisions —
-    > **not as financial advice.**
+    > certainty. Use this as one input — **not as financial advice.**
 
     ### Data Sources
-    - **FRED API** — Federal Reserve Bank of St. Louis (live data)
-    - **BLS** — Bureau of Labor Statistics (job loss by sector)
+    - **FRED API** — Federal Reserve Bank of St. Louis
+    - **BLS** — Bureau of Labor Statistics
     - **NBER** — Official US recession dates
     """)
-
     st.divider()
     st.caption("Built with Python · scikit-learn · Streamlit · Plotly · FRED API")

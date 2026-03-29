@@ -1,8 +1,7 @@
-streamlit==1.32.0
-fredapi==0.5.1
-scikit-learn==1.4.1
-plotly==5.19.0
-pandas==2.2.1
-numpy==1.26.4
-joblib==1.3.2
-requests==2.31.0
+streamlit
+fredapi
+scikit-learn
+plotly
+pandas
+numpy
+joblib

@@ -163,26 +163,27 @@ def fetch_live_data(api_key):
         return None, str(e)
 
 # ── Sidebar ────────────────────────────────────────────────
+# In app.py — replace the sidebar api_key section with this
+
 with st.sidebar:
     st.title("📡 RecessionRadar")
     st.caption("Real-time recession risk analysis")
     st.divider()
+    
+    # ✅ Use your key automatically — no user input needed
     try:
         api_key = st.secrets["FRED_API_KEY"]
         st.success("✅ Live data connected")
     except:
-        api_key = st.text_input(
-            "FRED API Key",
-            type="password",
-            help="Get free key at fred.stlouisfed.org"
-        )
+        st.warning("Running in demo mode")
+        api_key = None
+    
     st.divider()
     st.caption("""
     Tracks 6 Federal Reserve indicators
     that have predicted every US recession
-    since 1950. Trained on 2001, 2008,
-    and 2020 recession data.
-
+    since 1950.
+    
     ⚠️ Not financial advice.
     """)
 
